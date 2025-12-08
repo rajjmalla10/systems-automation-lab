@@ -1,0 +1,16 @@
+# Compiled files
+*.o
+*.out
+a.out
+*.exe
+
+# Executables
+test
+linked_list_*
+program
+
+# IDE files
+.vscode/
+
+# OS files
+.DS_Store
