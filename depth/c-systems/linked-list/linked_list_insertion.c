@@ -28,12 +28,33 @@ void Insert(head* first,int x){
 
 void print(struct Node* first){
     
-    printf("List is: \n");
+    printf("List is:\n");
     while(first!=NULL){
         printf("%d",first->data);
         first = first -> link;
     }
     printf("\n");
+}
+
+void FreeMemory(head* first){
+    printf("\n == Freeing Memory == \n");
+    head current =  *first;
+    int count = 0;
+
+    while (current!=NULL)
+    {
+        /* code */
+        head next = current->link;
+        printf("Freeing Node with data: %d\n",current->data);
+        free(current);
+        current = next;
+        count++;
+    }
+
+    *first = NULL;
+    printf("Freed %d nodes sucesfully!\n",count);
+
+    
 }
 
 int main(){
@@ -45,7 +66,9 @@ int main(){
         printf("Enter number for node: %d\n",i);
         scanf("%d",&x);
         Insert(&first,x);
-        print(&first);
+        print(first);
     }
+    FreeMemory(&first);
+    return 0;
 
 }

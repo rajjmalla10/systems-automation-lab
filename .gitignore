@@ -1,3 +1,11 @@
-./vscode
+# Executables
+test
+program
+
+# Compiled files
 *.o
+*.out
 a.out
+
+# IDE
+.vscode/
