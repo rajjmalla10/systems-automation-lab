@@ -57,8 +57,8 @@ test: test_proc.c $(TARGET)
 	$(CC) $(CFLAGS) -o test_proc test_proc.c -L. -lprocmon
 
 #BUild process monitor 
-monitor: proc_mon.c $(TARGET)
-	$(CC) $(CFLAGS) -o proc_mon proc_mon.c -L. -lprocmon
+monitor: proc_mon.c socket_server.c socket_header.h $(TARGET)
+	$(CC) $(CFLAGS) -o proc_mon proc_mon.c socket_server.c -L. -lprocmon
 
 
 #A 'run ' target for convience
@@ -77,6 +77,6 @@ clean:
 
 #.phony tells make these are not actual files
 #clean -> remove compiled filed so we can rebuild fresh
-	rm -f $(TARGET) $(OBJECTS) test_proc proc_mon
+	rm -f $(TARGET) $(OBJECTS) test_proc proc_mon /tmp/proc_mon.sock
 .PHONY: all debug clean test 
 	

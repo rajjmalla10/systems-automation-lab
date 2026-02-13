@@ -6,11 +6,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 
 #define READ_SIZE 256
 #define CARRY_SIZE 1024
 
-
+proc_node_t *index[32768] = {0};
 //Buffer managment code, 
 static int parse_proc_status(int fd, struct proc_info *info){
 	if(fd<0){
@@ -22,7 +24,7 @@ static int parse_proc_status(int fd, struct proc_info *info){
 	char read_buffer[READ_SIZE];
 	char carry_buffer[CARRY_SIZE];
 	size_t carry_len = 0;
-	int found_pid = 0,  found_name = 0 ;	
+	int found_pid = 0,  found_name = 0, found_mem = 0, found_state = 0, found_thread = 0;	
 	
 	while((bytes_read=read(fd,read_buffer,sizeof(read_buffer)))>0){
 		
@@ -66,14 +68,15 @@ static int parse_proc_status(int fd, struct proc_info *info){
 				else if((strncmp(line,"VmRSS:",6) == 0)){
 					
 					info->vmrss = atoi(line+6);
-					
+					found_mem = 1;
 					}
 				else if((strncmp(line,"Name:",5) == 0)){	
 					
 					char* p = line + 5;
 					while( *p ==' ' || *p == '\t') p++;
-					strncpy((*info).name,p,sizeof((*info).name)-1);
-					(*info).name[sizeof((*info).name)-1] = '\0';
+					size_t max_copy = sizeof((*info).name)-1;
+					strncpy((*info).name,p,max_copy);
+					(*info).name[max_copy] = '\0';
 					found_name = 1;
 					
 				}
@@ -82,13 +85,13 @@ static int parse_proc_status(int fd, struct proc_info *info){
 					char* p = line + 6;
 					if( *p == ' ' || *p == '\t') p++;
 					info->state = *p;
-					
+					found_state = 1;
 					
 					}
 					
 				else if(strncmp(line,"Threads:",8) == 0){
 					info->num_threads = atoi(line + 8);
-					
+					found_thread = 1;
 					}	
 					
 					
@@ -102,7 +105,7 @@ static int parse_proc_status(int fd, struct proc_info *info){
 				//early exit if we found all goal we need and clear memory as well
 				
 				
-				if(found_name && found_pid ){
+				if(found_name && found_pid && found_mem && found_state && found_thread ){
 					size_t remaning; 
 					remaning = carry_len - offset_tracker;
 					if(remaning>0){
@@ -169,8 +172,8 @@ static int parse_proc_stat(int fd, struct proc_info *info){
 			
 	//where to start the parsing i.e the index, 
 	
-	char* field_parsing = end_point + 2;
-	
+	char* field_parsing = end_point + 1;
+	while (*field_parsing == ' ') field_parsing++;
 	char state; 
 	int ppid, pgrp, session, tty_nr, tpgid;
 	unsigned long flags;
@@ -196,6 +199,11 @@ static int parse_proc_stat(int fd, struct proc_info *info){
 		info->nice_value = (int)nice;
 		info->utime = (long)utime;
 		info->stime = (long)stime;
+		if(info->utime > 0 || info->stime > 0){
+			DEBUG_PRINT("Process PID %d has CPU info: utime=%ld, stime=%ld\n", info->pid, info->utime, info->stime);
+		} else {
+			DEBUG_PRINT("Process PID %d: Cannot read CPU info (utime=0, stime=0)\n", info->pid);
+		}
 		info->cutime = cutime;
 		info->cstime = cstime;
 		info->starttime = starttime;
@@ -204,7 +212,48 @@ static int parse_proc_stat(int fd, struct proc_info *info){
 	
 	return -1;
 }
+
+//add proc node 
+void add_node(proc_node_t **head, struct proc_info info){
+	proc_node_t *new_node = (proc_node_t *)malloc(sizeof(proc_node_t));
+	if(new_node == NULL){
+		DEBUG_PRINT("Failed to allocate memory for new process nide");
+		return;
+		}
+	new_node->info = info;
+	new_node->active = 1;
 	
+	new_node -> next = *head;
+	new_node->prev = NULL;
+	
+	if(*head!=NULL){
+		(*head)->prev = new_node;
+		}
+	*head = new_node;	
+	if(info.pid >= 0 && info.pid < 32768){
+		index[info.pid] = new_node;
+		}
+	}	
+
+void to_remove(proc_node_t **head, proc_node_t *node_to_delete){
+	if(head == NULL || *head == NULL || node_to_delete == NULL) return;
+	
+	// 1. if the node we are removing is the head; 
+	if(*head == node_to_delete){
+		*head = node_to_delete->next;
+		}
+	
+	//2, if there's a neighbout behind us, tell them to point to our next. 
+	if(node_to_delete->prev!=NULL){
+		node_to_delete->prev->next = node_to_delete->next;
+		}
+	
+	if(node_to_delete->next!=NULL){
+		node_to_delete->next->prev = node_to_delete->prev;
+		}	
+		
+	free(node_to_delete);	
+	}	
 	
 //~ if(fd<0){
 	//~ errno = EBADFD;
@@ -278,7 +327,9 @@ int read_proc_full_info(pid_t pid, struct proc_info *info){
 	
 	if(read_proc_stat(pid,info)!= 0){
 		//warning: stat might fail but we still have basic info. 
-		fprintf(stderr,"Warning: could not read stat file, continuing with basic info\n");
+		info->utime = 0;
+		info->stime = 0;
+		
 		}	
 	
 	return 0;
@@ -327,6 +378,70 @@ int read_proc_stat(pid_t pid,struct proc_info *info){
 	close(fd);
 
 	return result;				
+	}	
+
+// u time and s time into percentagem for current and previous process time,
+
+float calculate_cpu_percentage(proc_node_t *head){
+	if(head == NULL){
+		DEBUG_PRINT("Head doesnt exist or is curropt!!\n");
+		return 0.0f;
+		}
+	
+	long current_ticks;
+	current_ticks = head->info.utime + head->info.stime;
+	
+	
+	
+	struct timeval now;
+	gettimeofday(&now,NULL);
+	
+	if(head->info.last_cpu_ticks == 0){
+		head->info.last_cpu_ticks = current_ticks;
+		head->info.last_cpu_checks = now;
+		return 0.0f;
+	}	
+	
+	if((long)current_ticks < (long)head->info.last_cpu_ticks){
+        // Process was restarted, reset tracking
+        head->info.last_cpu_ticks = current_ticks;
+        head->info.last_cpu_checks= now;
+        return 0.0f;
+    }
+	
+	
+	long tick_difference = current_ticks - head->info.last_cpu_ticks;
+	double time_diff;
+	//calculate time difference in seconds. 
+	if(now.tv_usec < head->info.last_cpu_checks.tv_usec){
+		time_diff = (now.tv_sec - head->info.last_cpu_checks.tv_sec -1) + (now.tv_usec + 1000000 - head->info.last_cpu_checks.tv_usec) / 1000000.0; 
+	}else{
+		time_diff = (now.tv_sec - head->info.last_cpu_checks.tv_sec ) + (now.tv_usec - head->info.last_cpu_checks.tv_usec) / 1000000.0;
+		}
+	if(time_diff < 0.1){
+		return head->info.cpu_percentage;
+		}
+	
+	long hz = sysconf(_SC_CLK_TCK);
+	
+	
+	long numCores = sysconf(_SC_NPROCESSORS_ONLN);
+	
+	double cpu_percentage = (tick_difference / (double)hz) / time_diff * 100.0 / numCores;
+		
+	if(cpu_percentage < 0.0f) cpu_percentage = 0.0f;
+	if(cpu_percentage > 100.0f) cpu_percentage = 100.0f;
+		
+		
+		
+
+	
+	head->info.last_cpu_ticks = current_ticks;
+	head->info.last_cpu_checks = now;
+	head->info.cpu_percentage = cpu_percentage;
+	
+	return cpu_percentage;
+	
 	}	
 	
 int read_proc_self_full_info(struct proc_info *info){

@@ -4,7 +4,7 @@
 
 #include <stdio.h>
 #include <sys/types.h>
-
+#include <sys/time.h>  
 #ifdef DEBUG
 #define DEBUG_PRINT(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 #else 
@@ -31,7 +31,24 @@ struct proc_info{
 	long itrealvalue;
 	long starttime;	//new: when process started
 	
+	float cpu_percentage;  // current cpu usage 
+	
+	
+	unsigned long last_cpu_ticks; //for tracking changes previous (utime + stime)
+	struct timeval last_cpu_checks;
+	
 	};
+
+typedef struct proc_node{
+	struct proc_info info; //data
+	struct proc_node *next; //next node
+	struct proc_node *prev; // previous node
+	int active;
+} proc_node_t;	
+
+
+
+
 	
 // Read procs status from /proc/[pid]/status
 //parameters: 
@@ -45,6 +62,7 @@ int read_proc_status(pid_t pid, struct proc_info *info);
 int read_proc_stat(pid_t pid, struct proc_info *info);
 int read_proc_full_info(pid_t pid, struct proc_info *info);
 int read_proc_self_full_info(struct proc_info *info);	
-
-
+void add_node(proc_node_t **head, struct proc_info info);
+void to_remove(proc_node_t **head, proc_node_t *to_remove);
+float calculate_cpu_percentage(proc_node_t *head);
 #endif
